@@ -1,0 +1,6 @@
+{
+  "name": "Miss Presentes - PDV",
+  "description": "Protótipo de Ponto de Venda para a loja Miss Presentes construído com React, Vite, Tailwind CSS e Lucide React.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
