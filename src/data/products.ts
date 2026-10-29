@@ -1,10 +1,10 @@
 import { Product } from '../types/pdv';
 
-export const INITIAL_PRODUCTS: Product[] = [
+export const PRODUCTS: Product[] = [
   {
     id: 'prod-1',
     name: 'Colar banhado a Ouro',
-    category: 'Colares',
+    categories: ['Colares'],
     sku: 0,
     stock: 0,
     price: 0,
@@ -12,7 +12,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   {
     id: 'prod-2',
     name: 'Pulseira de Prata',
-    category: 'Pulseiras',
+    categories: ['Pulseiras'],
     sku: 0,
     stock: 0,
     price: 0,
@@ -20,7 +20,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   {
     id: 'prod-3',
     name: 'Brinco de Pérola',
-    category: 'Brincos',
+    categories: ['Brincos'],
     sku: 0,
     stock: 0,
     price: 0,
@@ -28,7 +28,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   {
     id: 'prod-4',
     name: 'Anel Solitário',
-    category: 'Anéis',
+    categories: ['Anéis'],
     sku: 0,
     stock: 0,
     price: 0,
@@ -36,7 +36,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   {
     id: 'prod-5',
     name: 'Conjunto Strass',
-    category: 'Conjuntos',
+    categories: ['Conjuntos'],
     sku: 0,
     stock: 0,
     price: 0,
@@ -44,7 +44,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   {
     id: 'prod-6',
     name: 'Caixa de Presente P',
-    category: 'Embalagens',
+    categories: ['Embalagens'],
     sku: 0,
     stock: 0,
     price: 0,
