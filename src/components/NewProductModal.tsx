@@ -1,16 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ImagePlus, Plus, Tag, X } from 'lucide-react';
-import { Product } from '../types/pdv';
+import { CreateProductInput } from '../data/api';
 
 interface NewProductModalProps {
   categories: string[];
   onClose: () => void;
-  onSave: (product: Product) => void;
+  onSave: (product: CreateProductInput) => Promise<boolean>;
+  isSubmitting: boolean;
 }
 
-const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
-export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, onClose, onSave }) => {
+export const NewProductModal: React.FC<NewProductModalProps> = ({
+  categories,
+  onClose,
+  onSave,
+  isSubmitting,
+}) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState('');
   const [sku, setSku] = useState('');
@@ -18,17 +24,29 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
   const [stock, setStock] = useState('0');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [newCategory, setNewCategory] = useState('');
+  const [imageFile, setImageFile] = useState<File>();
   const [imageUrl, setImageUrl] = useState<string>();
   const [imageError, setImageError] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape' && !isSubmitting) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [isSubmitting, onClose]);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImageUrl(undefined);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(imageFile);
+    setImageUrl(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [imageFile]);
 
   const toggleCategory = (category: string) => {
     setSelectedCategories((current) =>
@@ -49,56 +67,46 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
   const handleImage = (file?: File) => {
     setImageError('');
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setImageError('Selecione um arquivo de imagem válido.');
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setImageFile(undefined);
+      setImageError('Use uma imagem JPEG, PNG ou WebP.');
       return;
     }
     if (file.size > MAX_IMAGE_SIZE) {
-      setImageError('A imagem deve ter no máximo 2 MB para ser armazenada no navegador.');
+      setImageFile(undefined);
+      setImageError('A imagem deve ter no máximo 5 MB.');
       return;
     }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setImageUrl(reader.result);
-      } else {
-        setImageError('Não foi possível ler o arquivo de imagem.');
-      }
-    };
-    reader.onerror = () => setImageError('Falha ao ler a imagem. Tente selecionar o arquivo novamente.');
-    reader.readAsDataURL(file);
+    setImageFile(file);
   };
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const parsedPrice = Number(price);
     const parsedStock = Number(stock);
-    if (!name.trim() || !Number.isFinite(parsedPrice) || parsedPrice < 0
-      || !Number.isInteger(parsedStock) || parsedStock < 0) {
+    if (!name.trim() || name.trim().length > 180 || !Number.isFinite(parsedPrice)
+      || parsedPrice < 0 || parsedPrice > 99_999_999.99
+      || !Number.isInteger(parsedStock) || parsedStock < 0 || parsedStock > 2_147_483_647) {
       return;
     }
 
-    const productId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-    onSave({
-      id: `prod-${productId}`,
+    setSaveError('');
+    const saved = await onSave({
       name: name.trim(),
-      sku: sku.trim() || undefined,
+      sku: sku.trim(),
       categories: selectedCategories,
       price: parsedPrice,
       stock: parsedStock,
-      imageUrl,
+      image: imageFile,
     });
+    if (!saved) setSaveError('O produto não foi salvo. Confira o erro indicado na página e tente novamente.');
   };
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/70 p-4"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget && !isSubmitting) onClose();
       }}
     >
       <section
@@ -116,6 +124,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
             <button
               type="button"
               onClick={onClose}
+              disabled={isSubmitting}
               aria-label="Fechar cadastro"
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
             >
@@ -129,6 +138,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
               <input
                 autoFocus
                 required
+                maxLength={180}
                 type="text"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
@@ -141,6 +151,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
               SKU / código
               <input
                 type="text"
+                maxLength={80}
                 value={sku}
                 onChange={(event) => setSku(event.target.value)}
                 placeholder="Opcional"
@@ -154,6 +165,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
                 required
                 type="number"
                 min="0"
+                max="99999999.99"
                 step="0.01"
                 value={price}
                 onChange={(event) => setPrice(event.target.value)}
@@ -168,6 +180,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
                 required
                 type="number"
                 min="0"
+                max="2147483647"
                 step="1"
                 value={stock}
                 onChange={(event) => setStock(event.target.value)}
@@ -257,7 +270,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
                     <button
                       type="button"
                       onClick={() => {
-                        setImageUrl(undefined);
+                        setImageFile(undefined);
                         setImageError('');
                         if (fileInputRef.current) fileInputRef.current.value = '';
                       }}
@@ -278,7 +291,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
                     >
                       selecione pelo gerenciador de arquivos
                     </button>
-                    <p className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">Imagem até 2 MB</p>
+                    <p className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">JPEG, PNG ou WebP, até 5 MB</p>
                   </>
                 )}
                 <input
@@ -294,22 +307,29 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ categories, on
             </div>
           </div>
 
+          {saveError && (
+            <p role="alert" className="mx-5 mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300 md:mx-6">
+              {saveError}
+            </p>
+          )}
           <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4 dark:border-slate-800 md:px-6">
             <button
               type="button"
               onClick={onClose}
+              disabled={isSubmitting}
               className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              disabled={!name.trim() || price === '' || !Number.isFinite(Number(price)) || Number(price) < 0
-                || !Number.isInteger(Number(stock)) || Number(stock) < 0}
+              disabled={isSubmitting || !name.trim() || name.trim().length > 180 || price === ''
+                || !Number.isFinite(Number(price)) || Number(price) < 0 || Number(price) > 99_999_999.99
+                || !Number.isInteger(Number(stock)) || Number(stock) < 0 || Number(stock) > 2_147_483_647}
               className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-700 dark:hover:bg-amber-600"
             >
               <Plus className="h-3.5 w-3.5" />
-              Cadastrar produto
+              {isSubmitting ? 'Salvando...' : 'Cadastrar produto'}
             </button>
           </div>
         </form>

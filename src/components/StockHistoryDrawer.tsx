@@ -1,13 +1,31 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowDownUp, Clock3, History, X } from 'lucide-react';
-import { StockHistoryEntry } from '../types/pdv';
+import { SaleRecord, StockHistoryEntry } from '../types/pdv';
 
 interface StockHistoryDrawerProps {
   history: StockHistoryEntry[];
+  sales: SaleRecord[];
   onClose: () => void;
 }
 
-export const StockHistoryDrawer: React.FC<StockHistoryDrawerProps> = ({ history, onClose }) => {
+const paymentMethodLabels: Record<SaleRecord['paymentMethod'], string> = {
+  pix: 'Pix',
+  cash: 'Dinheiro',
+  debit: 'Débito',
+  credit: 'Crédito',
+};
+
+const formatDate = (date: string) => new Intl.DateTimeFormat('pt-BR', {
+  dateStyle: 'short',
+  timeStyle: 'short',
+}).format(new Date(date));
+
+const formatCurrency = (value: number) => value.toLocaleString('pt-BR', {
+  style: 'currency',
+  currency: 'BRL',
+});
+
+export const StockHistoryDrawer: React.FC<StockHistoryDrawerProps> = ({ history, sales, onClose }) => {
   const [activeTab, setActiveTab] = useState<'stock' | 'transactions'>('stock');
 
   useEffect(() => {
@@ -112,10 +130,7 @@ export const StockHistoryDrawer: React.FC<StockHistoryDrawerProps> = ({ history,
                       </div>
                       <p className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-slate-500">
                         <Clock3 className="h-3 w-3" />
-                        {new Intl.DateTimeFormat('pt-BR', {
-                          dateStyle: 'short',
-                          timeStyle: 'short',
-                        }).format(new Date(entry.changedAt))}
+                        {formatDate(entry.changedAt)}
                       </p>
                     </li>
                   );
@@ -124,12 +139,45 @@ export const StockHistoryDrawer: React.FC<StockHistoryDrawerProps> = ({ history,
             )}
           </div>
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-            <History className="mb-3 h-6 w-6 text-slate-300 dark:text-slate-600" />
-            <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Histórico de transações</p>
-            <p className="mt-1 max-w-xs text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-              Será preenchido quando o fluxo de finalização e registro de vendas estiver implementado.
+          <div className="flex-1 overflow-y-auto p-5">
+            <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+              Vendas recentes registradas no banco de dados.
             </p>
+            {sales.length === 0 ? (
+              <div className="flex h-48 flex-col items-center justify-center text-center">
+                <History className="mb-3 h-6 w-6 text-slate-300 dark:text-slate-600" />
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Nenhuma venda registrada</p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">As vendas confirmadas aparecerão aqui.</p>
+              </div>
+            ) : (
+              <ol className="space-y-3">
+                {sales.map((sale) => (
+                  <li key={sale.id} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-800/60">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                          {paymentMethodLabels[sale.paymentMethod]}
+                          {sale.paymentMethod === 'credit' && sale.installments > 1
+                            ? ` · ${sale.installments}x`
+                            : ''}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          {sale.itemCount} {sale.itemCount === 1 ? 'item' : 'itens'}
+                          {sale.changeGiven > 0 ? ` · Troco ${formatCurrency(sale.changeGiven)}` : ''}
+                        </p>
+                      </div>
+                      <span className="shrink-0 text-sm font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                        {formatCurrency(sale.total)}
+                      </span>
+                    </div>
+                    <p className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-slate-500">
+                      <Clock3 className="h-3 w-3" />
+                      {formatDate(sale.createdAt)}
+                    </p>
+                  </li>
+                ))}
+              </ol>
+            )}
           </div>
         )}
       </aside>

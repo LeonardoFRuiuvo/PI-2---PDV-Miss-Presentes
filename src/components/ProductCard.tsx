@@ -10,10 +10,9 @@ interface ProductCardProps {
 export const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart }) => {
   const isOutOfStock = product.stock <= 0;
 
-  // O código SKU por padrão exibe 0 até que um código seja adicionado
   const displaySku = product.sku !== undefined && product.sku !== null && product.sku !== ''
     ? product.sku
-    : 0;
+    : '—';
 
   return (
     <article

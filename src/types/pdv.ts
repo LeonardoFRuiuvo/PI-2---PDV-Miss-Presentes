@@ -2,8 +2,8 @@ export interface Product {
   id: string;
   name: string;
   categories: string[];
-  sku?: string | number; // Padrão '0' se não especificado
-  stock: number; // Quantidade de itens no estoque
+  sku?: string;
+  stock: number;
   price: number;
   imageUrl?: string;
 }
@@ -20,4 +20,18 @@ export interface StockHistoryEntry {
 export interface CartItem {
   product: Product;
   quantity: number;
+}
+
+export interface SaleRecord {
+  id: string;
+  paymentMethod: 'pix' | 'cash' | 'debit' | 'credit';
+  subtotal: number;
+  discount: number;
+  interest: number;
+  total: number;
+  installments: number;
+  amountReceived?: number;
+  changeGiven: number;
+  itemCount: number;
+  createdAt: string;
 }

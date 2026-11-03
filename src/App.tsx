@@ -3,48 +3,34 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Header } from './components/Header';
 import { CheckoutModal } from './components/CheckoutModal';
 import { InventoryPage } from './components/InventoryPage';
 import { ProductCard } from './components/ProductCard';
 import { SidebarCart } from './components/SidebarCart';
-import { loadProducts, saveProducts } from './data/productStorage';
-import { PRODUCTS } from './data/products';
-import { Product, CartItem, StockHistoryEntry } from './types/pdv';
-
-interface InventoryState {
-  products: Product[];
-  stockHistory: StockHistoryEntry[];
-}
-
-function createEventId(): string {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
+import {
+  createProduct,
+  createSale,
+  createStockMovement,
+  CreateProductInput,
+  CreateSaleInput,
+  listCategories,
+  listProducts,
+  listSales,
+  listStockMovements,
+  updateProduct,
+} from './data/api';
+import { CartItem, Product, SaleRecord, StockHistoryEntry } from './types/pdv';
 
 export default function App() {
-  const [initialInventoryState] = useState(() => {
-    let products = PRODUCTS;
-    let productsReady = true;
-    let productLoadError: string | undefined;
-    try {
-      products = loadProducts();
-    } catch (error) {
-      console.error('Não foi possível carregar os produtos do armazenamento local.', error);
-      productsReady = false;
-      productLoadError = 'Não foi possível carregar os produtos salvos. Os produtos de exemplo estão sendo exibidos.';
-    }
-
-    return {
-      inventory: { products, stockHistory: [] },
-      productsReady,
-      error: productLoadError,
-    };
-  });
-  const [inventory, setInventory] = useState<InventoryState>(initialInventoryState.inventory);
-  const [productsReady] = useState(initialInventoryState.productsReady);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [stockHistory, setStockHistory] = useState<StockHistoryEntry[]>([]);
+  const [sales, setSales] = useState<SaleRecord[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [apiError, setApiError] = useState<string>();
   const [isDarkMode, setIsDarkMode] = useState(() => {
     try {
       return window.localStorage.getItem('miss-presentes-theme') === 'dark';
@@ -55,12 +41,47 @@ export default function App() {
   });
   const [currentPage, setCurrentPage] = useState<'pos' | 'inventory'>('pos');
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-  const [storageError, setStorageError] = useState<string | undefined>(initialInventoryState.error);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
-  
-  // Carrinho de itens (conceito base funcional e intuitivo)
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
+
+  const refreshData = useCallback(async () => {
+    const [nextProducts, nextCategories, nextMovements, nextSales] = await Promise.all([
+      listProducts(),
+      listCategories(),
+      listStockMovements(),
+      listSales(),
+    ]);
+
+    setProducts(nextProducts);
+    setCategories(nextCategories);
+    setStockHistory(nextMovements);
+    setSales(nextSales);
+    setCartItems((currentItems) => currentItems.flatMap((item) => {
+      const currentProduct = nextProducts.find((product) => product.id === item.product.id);
+      if (!currentProduct || currentProduct.stock <= 0) return [];
+      return [{
+        product: currentProduct,
+        quantity: Math.min(item.quantity, currentProduct.stock),
+      }];
+    }));
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    refreshData()
+      .catch((error: unknown) => {
+        if (active) {
+          setApiError(error instanceof Error ? error.message : 'Não foi possível conectar à API.');
+        }
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshData]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode);
@@ -71,30 +92,57 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  useEffect(() => {
-    if (!productsReady) {
-      return;
+  const runMutation = async (operation: () => Promise<void>): Promise<boolean> => {
+    if (isSaving) return false;
+    setIsSaving(true);
+    setApiError(undefined);
+    try {
+      await operation();
+    } catch (error) {
+      let message = error instanceof Error ? error.message : 'Não foi possível salvar a alteração.';
+      try {
+        await refreshData();
+      } catch (refreshError) {
+        const reason = refreshError instanceof Error ? refreshError.message : 'erro desconhecido';
+        message = `${message} Não foi possível atualizar os dados: ${reason}`;
+      }
+      setApiError(message);
+      setIsSaving(false);
+      return false;
     }
 
     try {
-      saveProducts(inventory.products);
+      await refreshData();
     } catch (error) {
-      console.error('Não foi possível salvar os produtos no armazenamento local.', error);
-      setStorageError('Não foi possível salvar as alterações no navegador. Verifique o espaço disponível e as permissões de armazenamento.');
+      const reason = error instanceof Error ? error.message : 'erro desconhecido';
+      setApiError(`A alteração foi registrada, mas não foi possível atualizar os dados: ${reason}`);
+    } finally {
+      setIsSaving(false);
     }
-  }, [inventory.products, productsReady]);
+    return true;
+  };
 
-  const products = inventory.products;
-  const categories = [...new Set(products.flatMap((product) => product.categories))];
+  const reloadData = async () => {
+    setIsLoading(true);
+    setApiError(undefined);
+    try {
+      await refreshData();
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Não foi possível conectar à API.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-  // Filtragem simples dos produtos
+  const productCategories = [...new Set(products.flatMap((product) => product.categories))];
   const filteredProducts = products.filter((product) => {
     const matchesCategory = selectedCategory === null || product.categories.includes(selectedCategory);
-    const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const query = searchTerm.toLocaleLowerCase();
+    const matchesSearch = product.name.toLocaleLowerCase().includes(query)
+      || (product.sku?.toLocaleLowerCase().includes(query) ?? false);
     return matchesCategory && matchesSearch;
   });
 
-  // Adicionar item ao carrinho
   const handleAddToCart = (product: Product) => {
     const availableProduct = products.find((item) => item.id === product.id);
     if (!availableProduct || availableProduct.stock <= 0) {
@@ -117,97 +165,88 @@ export default function App() {
     });
   };
 
-  // Remover item do carrinho
   const handleRemoveFromCart = (productId: string) => {
     setCartItems((prev) => prev.filter((item) => item.product.id !== productId));
   };
 
-  // Limpar todos os itens do carrinho
   const handleClearCart = () => {
     setCartItems([]);
   };
 
-  const handleStockChange = (productId: string, stock: number) => {
-    const changedAt = new Date().toISOString();
-    const eventId = createEventId();
+  const handleStockChange = async (productId: string, stock: number): Promise<boolean> => {
+    const product = products.find((item) => item.id === productId);
+    if (!product || product.stock === stock) return true;
+    return runMutation(() => createStockMovement(productId, stock - product.stock));
+  };
 
-    setInventory((current) => {
-      const currentProduct = current.products.find((product) => product.id === productId);
-      if (!currentProduct || currentProduct.stock === stock) {
-        return current;
+  const handleProductUpdate = async (updatedProduct: Product): Promise<boolean> => {
+    return runMutation(() => updateProduct(updatedProduct.id, {
+      name: updatedProduct.name,
+      sku: updatedProduct.sku ?? '',
+      price: updatedProduct.price,
+      categories: updatedProduct.categories,
+    }));
+  };
+
+  const handleProductCreate = async (product: CreateProductInput): Promise<boolean> => {
+    return runMutation(() => createProduct(product));
+  };
+
+  const handleCheckout = async (sale: CreateSaleInput, idempotencyKey: string): Promise<void> => {
+    if (isSaving) throw new Error('Uma operação já está sendo processada.');
+    setIsSaving(true);
+    setApiError(undefined);
+    try {
+      await createSale(sale, idempotencyKey);
+    } catch (error) {
+      let message = error instanceof Error ? error.message : 'Não foi possível registrar a venda.';
+      try {
+        await refreshData();
+      } catch (refreshError) {
+        const reason = refreshError instanceof Error ? refreshError.message : 'erro desconhecido';
+        message = `${message} Não foi possível atualizar os dados: ${reason}`;
       }
+      setApiError(message);
+      setIsSaving(false);
+      throw new Error(message);
+    }
 
-      const historyEntry: StockHistoryEntry = {
-        id: `stock-${eventId}`,
-        productId,
-        productName: currentProduct.name,
-        previousStock: currentProduct.stock,
-        newStock: stock,
-        changedAt,
-      };
+    setCartItems([]);
+    setIsCheckoutOpen(false);
+    try {
+      await refreshData();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'erro desconhecido';
+      setApiError(`A venda foi registrada, mas não foi possível atualizar os dados: ${reason}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
-      return {
-        products: current.products.map((product) =>
-          product.id === productId ? { ...product, stock } : product
-        ),
-        stockHistory: [historyEntry, ...current.stockHistory],
-      };
-    });
-    setCartItems((currentItems) =>
-      currentItems.flatMap((item) => {
-        if (item.product.id !== productId) return [item];
-        if (stock <= 0) return [];
-        return [{ ...item, quantity: Math.min(item.quantity, stock) }];
-      })
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100/70 font-sans text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+        Carregando dados do banco de dados…
+      </div>
     );
-  };
-
-  const handleProductUpdate = (updatedProduct: Product) => {
-    setInventory((current) => ({
-      ...current,
-      products: current.products.map((product) =>
-        product.id === updatedProduct.id ? updatedProduct : product
-      ),
-    }));
-    setCartItems((currentItems) =>
-      currentItems.map((item) =>
-        item.product.id === updatedProduct.id ? { ...item, product: updatedProduct } : item
-      )
-    );
-  };
-
-  const handleProductCreate = (product: Product) => {
-    const changedAt = new Date().toISOString();
-    const historyEntry: StockHistoryEntry = {
-      id: `stock-${createEventId()}`,
-      productId: product.id,
-      productName: product.name,
-      previousStock: 0,
-      newStock: product.stock,
-      changedAt,
-    };
-
-    setInventory((current) => ({
-      products: [...current.products, product],
-      stockHistory: product.stock > 0
-        ? [historyEntry, ...current.stockHistory]
-        : current.stockHistory,
-    }));
-  };
+  }
 
   if (currentPage === 'inventory') {
     return (
       <InventoryPage
         products={products}
         categories={categories}
-        stockHistory={inventory.stockHistory}
+        stockHistory={stockHistory}
+        sales={sales}
         onStockChange={handleStockChange}
         onProductUpdate={handleProductUpdate}
         onProductCreate={handleProductCreate}
+        isSaving={isSaving}
         isDarkMode={isDarkMode}
         onThemeToggle={() => setIsDarkMode((current) => !current)}
         onBack={() => setCurrentPage('pos')}
-        storageError={storageError}
+        apiError={apiError}
+        onReload={reloadData}
       />
     );
   }
@@ -221,6 +260,14 @@ export default function App() {
         isDarkMode={isDarkMode}
         onThemeToggle={() => setIsDarkMode((current) => !current)}
       />
+      {apiError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300">
+          <span>{apiError}</span>
+          <button type="button" onClick={reloadData} className="font-semibold underline underline-offset-2">
+            Recarregar dados
+          </button>
+        </div>
+      )}
 
       {/* 2. Área Principal com Grid de Peças e Barra Lateral do Carrinho */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
@@ -239,7 +286,7 @@ export default function App() {
             >
               Todos
             </button>
-            {categories.map((cat) => (
+            {productCategories.map((cat) => (
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
@@ -254,16 +301,37 @@ export default function App() {
             ))}
           </div>
 
-          {/* Grid dos Produtos de Referência */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-            {filteredProducts.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
-                onAddToCart={handleAddToCart}
-              />
-            ))}
-          </div>
+          {filteredProducts.length === 0 ? (
+            <div className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/70 px-6 text-center dark:border-slate-700 dark:bg-slate-900/60">
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                {products.length === 0 ? 'Nenhum produto cadastrado' : 'Nenhum produto encontrado'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {products.length === 0
+                  ? 'Cadastre os produtos pelo gerenciamento de estoque para começar.'
+                  : 'Tente outra busca ou selecione uma categoria diferente.'}
+              </p>
+              {products.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage('inventory')}
+                  className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white dark:bg-amber-700"
+                >
+                  Abrir gerenciamento de estoque
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4">
+              {filteredProducts.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onAddToCart={handleAddToCart}
+                />
+              ))}
+            </div>
+          )}
         </main>
 
         {/* 3. Barra Lateral com o Ícone do Carrinho e Botão de Remover Itens */}
@@ -278,6 +346,8 @@ export default function App() {
         <CheckoutModal
           items={cartItems}
           onClose={() => setIsCheckoutOpen(false)}
+          onConfirm={handleCheckout}
+          isSubmitting={isSaving}
         />
       )}
     </div>

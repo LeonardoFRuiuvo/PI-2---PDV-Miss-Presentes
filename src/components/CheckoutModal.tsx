@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Banknote, CreditCard, QrCode, X } from 'lucide-react';
+import { cartItemsToSaleItems, CreateSaleInput } from '../data/api';
 import { CartItem } from '../types/pdv';
 
 type PaymentMethod = 'pix' | 'cash' | 'debit' | 'credit';
@@ -9,6 +10,8 @@ type InterestType = 'amount' | 'percentage';
 interface CheckoutModalProps {
   items: CartItem[];
   onClose: () => void;
+  onConfirm: (sale: CreateSaleInput, idempotencyKey: string) => Promise<void>;
+  isSubmitting: boolean;
 }
 
 const paymentMethods: { id: PaymentMethod; label: string; icon: typeof QrCode }[] = [
@@ -35,7 +38,12 @@ const getInstallmentAmounts = (total: number, count: number): number[] => {
   );
 };
 
-export const CheckoutModal: React.FC<CheckoutModalProps> = ({ items, onClose }) => {
+export const CheckoutModal: React.FC<CheckoutModalProps> = ({
+  items,
+  onClose,
+  onConfirm,
+  isSubmitting,
+}) => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('pix');
   const [discountType, setDiscountType] = useState<DiscountType>('amount');
   const [discountValue, setDiscountValue] = useState('');
@@ -43,6 +51,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ items, onClose }) 
   const [interestValue, setInterestValue] = useState('');
   const [installments, setInstallments] = useState('1');
   const [cashReceived, setCashReceived] = useState('');
+  const [submitError, setSubmitError] = useState<string>();
+  const [isConfirming, setIsConfirming] = useState(false);
+  const idempotencyKey = useRef<string | undefined>(undefined);
+  const lastRequestFingerprint = useRef<string | undefined>(undefined);
 
   const subtotal = useMemo(
     () => roundCurrency(items.reduce((total, item) => total + item.product.price * item.quantity, 0)),
@@ -69,19 +81,65 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ items, onClose }) 
     ? `${installmentCount}x de ${formatCurrency(smallestInstallment)}`
     : `${installmentCount}x de ${formatCurrency(smallestInstallment)} a ${formatCurrency(largestInstallment)}`;
 
+  const handleConfirm = async () => {
+    if (isConfirming || isSubmitting) return;
+    if ((discountType === 'percentage' && parsedDiscount > 100)
+      || (discountType === 'amount' && parsedDiscount > subtotal)) {
+      setSubmitError('O desconto deve estar entre zero e o subtotal da venda.');
+      return;
+    }
+    if (paymentMethod === 'credit' && interestType === 'percentage' && parsedInterest > 1000) {
+      setSubmitError('O percentual de juros não pode ultrapassar 1000%.');
+      return;
+    }
+    if (paymentMethod === 'cash' && cashReceived !== '' && parsedCashReceived < total) {
+      setSubmitError('O valor recebido não pode ser menor que o total da venda.');
+      return;
+    }
+
+    setIsConfirming(true);
+    setSubmitError(undefined);
+    try {
+      const sale: CreateSaleInput = {
+        payment_method: paymentMethod,
+        installments: paymentMethod === 'credit' ? installmentCount : 1,
+        discount_type: discountType,
+        discount_value: parsedDiscount,
+        interest_type: paymentMethod === 'credit' ? interestType : 'amount',
+        interest_value: paymentMethod === 'credit' ? parsedInterest : 0,
+        ...(paymentMethod === 'cash' && cashReceived !== ''
+          ? { amount_received: parsedCashReceived }
+          : {}),
+        items: cartItemsToSaleItems(items),
+      };
+      const fingerprint = JSON.stringify(sale);
+      if (!idempotencyKey.current || lastRequestFingerprint.current !== fingerprint) {
+        idempotencyKey.current = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        lastRequestFingerprint.current = fingerprint;
+      }
+      await onConfirm(sale, idempotencyKey.current);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : 'Não foi possível registrar a venda.');
+    } finally {
+      setIsConfirming(false);
+    }
+  };
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape' && !isSubmitting && !isConfirming) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [isConfirming, isSubmitting, onClose]);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/60 p-4"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget && !isSubmitting && !isConfirming) onClose();
       }}
     >
       <section
@@ -98,6 +156,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ items, onClose }) 
           <button
             type="button"
             onClick={onClose}
+            disabled={isSubmitting || isConfirming}
             aria-label="Fechar finalização"
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
           >
@@ -151,6 +210,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ items, onClose }) 
                       aria-label={interestType === 'percentage' ? 'Juros percentual' : 'Juros em reais'}
                       type="number"
                       min="0"
+                      max={interestType === 'percentage' ? 1000 : undefined}
                       step={interestType === 'percentage' ? '0.01' : '0.01'}
                       value={interestValue}
                       onChange={(event) => setInterestValue(event.target.value)}
@@ -286,17 +346,35 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ items, onClose }) 
           </section>
         </div>
 
-        <footer className="flex flex-col-reverse gap-3 border-t border-slate-100 px-5 py-4 dark:border-slate-800 md:flex-row md:items-center md:justify-between md:px-6">
-          <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-            Prévia: confirmação e registro da venda serão conectados ao backend.
-          </p>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 dark:bg-amber-700 dark:hover:bg-amber-600"
-          >
-            Voltar ao carrinho
-          </button>
+        <footer className="border-t border-slate-100 px-5 py-4 dark:border-slate-800 md:px-6">
+          {submitError && (
+            <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300">
+              {submitError}
+            </p>
+          )}
+          <div className="flex flex-col-reverse gap-3 md:flex-row md:items-center md:justify-between">
+            <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+              O estoque e os valores serão validados e registrados pelo servidor.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isSubmitting || isConfirming}
+                className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Voltar ao carrinho
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirm}
+                disabled={isSubmitting || isConfirming || items.length === 0}
+                className="rounded-lg bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-700 dark:hover:bg-amber-600"
+              >
+                {isSubmitting || isConfirming ? 'Registrando...' : 'Confirmar venda'}
+              </button>
+            </div>
+          </div>
         </footer>
       </section>
     </div>

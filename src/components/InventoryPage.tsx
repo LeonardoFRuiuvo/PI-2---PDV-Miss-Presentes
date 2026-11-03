@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Check, History, Minus, PackagePlus, Pencil, Plus, Sparkles, Tag, X } from 'lucide-react';
-import { Product, StockHistoryEntry } from '../types/pdv';
+import { CreateProductInput } from '../data/api';
+import { Product, SaleRecord, StockHistoryEntry } from '../types/pdv';
 import { NewProductModal } from './NewProductModal';
 import { StockHistoryDrawer } from './StockHistoryDrawer';
 import { ThemeToggle } from './ThemeToggle';
@@ -9,20 +10,24 @@ interface InventoryPageProps {
   products: Product[];
   categories: string[];
   stockHistory: StockHistoryEntry[];
-  onStockChange: (productId: string, stock: number) => void;
-  onProductUpdate: (product: Product) => void;
-  onProductCreate: (product: Product) => void;
+  sales: SaleRecord[];
+  onStockChange: (productId: string, stock: number) => Promise<boolean>;
+  onProductUpdate: (product: Product) => Promise<boolean>;
+  onProductCreate: (product: CreateProductInput) => Promise<boolean>;
+  isSaving: boolean;
   isDarkMode: boolean;
   onThemeToggle: () => void;
   onBack: () => void;
-  storageError?: string;
+  apiError?: string;
+  onReload: () => void;
 }
 
 interface InventoryProductCardProps {
   product: Product;
   categories: string[];
-  onStockChange: (productId: string, stock: number) => void;
-  onProductUpdate: (product: Product) => void;
+  onStockChange: (productId: string, stock: number) => Promise<boolean>;
+  onProductUpdate: (product: Product) => Promise<boolean>;
+  isSaving: boolean;
 }
 
 const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
@@ -30,6 +35,7 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
   categories,
   onStockChange,
   onProductUpdate,
+  isSaving,
 }) => {
   const [stockValue, setStockValue] = useState(String(product.stock));
   const [isEditing, setIsEditing] = useState(false);
@@ -51,8 +57,11 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
   };
 
   const finishEditing = () => {
-    if (/^\d+$/.test(stockValue) && Number.isSafeInteger(Number(stockValue))) {
-      onStockChange(product.id, Number(stockValue));
+    if (/^\d+$/.test(stockValue) && Number.isSafeInteger(Number(stockValue))
+      && Number(stockValue) <= 2_147_483_647) {
+      void onStockChange(product.id, Number(stockValue)).then((saved) => {
+        if (!saved) setStockValue(String(product.stock));
+      });
     } else {
       setStockValue(String(product.stock));
     }
@@ -75,17 +84,18 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
     setNewCategory('');
   };
 
-  const saveProduct = () => {
-    if (!draft.name.trim() || !Number.isFinite(draft.price) || draft.price < 0) {
+  const saveProduct = async () => {
+    if (!draft.name.trim() || draft.name.length > 180 || !Number.isFinite(draft.price)
+      || draft.price < 0 || draft.price > 99_999_999.99) {
       return;
     }
-    onProductUpdate({
+    const saved = await onProductUpdate({
       ...draft,
       name: draft.name.trim(),
       sku: draft.sku === '' ? undefined : draft.sku,
       categories: [...new Set(draft.categories)],
     });
-    setIsEditing(false);
+    if (saved) setIsEditing(false);
   };
 
   return (
@@ -99,8 +109,9 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
             <button
               type="button"
               onClick={saveProduct}
+              disabled={isSaving || !draft.name.trim() || draft.name.length > 180
+                || !Number.isFinite(draft.price) || draft.price < 0 || draft.price > 99_999_999.99}
               aria-label={`Salvar alterações de ${product.name}`}
-              disabled={!draft.name.trim() || !Number.isFinite(draft.price) || draft.price < 0}
               className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-amber-700 text-white transition-colors hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-700 dark:hover:bg-amber-600"
             >
               <Check className="h-4 w-4" />
@@ -121,6 +132,7 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
           <button
             type="button"
             onClick={() => setIsEditing(true)}
+            disabled={isSaving}
             aria-label={`Editar produto ${product.name}`}
             title="Editar produto"
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 dark:border-slate-700 dark:text-slate-400 dark:hover:border-amber-700 dark:hover:bg-amber-950/50 dark:hover:text-amber-300"
@@ -137,6 +149,7 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
               Nome do produto
               <input
                 type="text"
+                maxLength={180}
                 value={draft.name}
                 onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
                 className="mt-1 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:border-amber-600 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
@@ -146,6 +159,7 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
               SKU
               <input
                 type="text"
+                maxLength={80}
                 value={draft.sku ?? ''}
                 onChange={(event) => setDraft((current) => ({ ...current, sku: event.target.value }))}
                 className="mt-1 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:border-amber-600 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
@@ -156,6 +170,7 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
               <input
                 type="number"
                 min="0"
+                max="99999999.99"
                 step="0.01"
                 value={draft.price}
                 onChange={(event) => setDraft((current) => ({
@@ -216,7 +231,7 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
           </div>
         ) : (
           <>
-            <p className="mb-1 font-mono text-xs text-slate-400 dark:text-slate-500">SKU: {product.sku || 0}</p>
+            <p className="mb-1 font-mono text-xs text-slate-400 dark:text-slate-500">SKU: {product.sku || '—'}</p>
             <h2 className="text-sm font-semibold leading-snug text-slate-900 dark:text-slate-100">{product.name}</h2>
             <div className="mt-2 flex flex-wrap gap-1">
               {product.categories.map((category) => (
@@ -241,7 +256,8 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
             type="button"
             aria-label={`Diminuir estoque de ${product.name}`}
             onClick={() => onStockChange(product.id, Math.max(0, product.stock - 1))}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            disabled={isSaving || product.stock === 0}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition-colors hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
           >
             <Minus className="h-4 w-4" />
           </button>
@@ -249,10 +265,12 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
             id={`stock-${product.id}`}
             type="number"
             min="0"
+            max="2147483647"
             step="1"
             value={stockValue}
             onChange={(event) => updateStock(event.target.value)}
             onBlur={finishEditing}
+            disabled={isSaving}
             aria-label={`Quantidade em estoque de ${product.name}`}
             className="h-9 w-full min-w-0 rounded-lg border border-slate-200 bg-white text-center text-sm font-semibold tabular-nums text-slate-900 focus:border-amber-600 focus:outline-hidden dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           />
@@ -260,7 +278,8 @@ const InventoryProductCard: React.FC<InventoryProductCardProps> = ({
             type="button"
             aria-label={`Aumentar estoque de ${product.name}`}
             onClick={() => onStockChange(product.id, product.stock + 1)}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white transition-colors hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 dark:bg-amber-700 dark:hover:bg-amber-600"
+            disabled={isSaving}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white transition-colors hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-700 dark:hover:bg-amber-600"
           >
             <Plus className="h-4 w-4" />
           </button>
@@ -274,20 +293,24 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
   products,
   categories,
   stockHistory,
+  sales,
   onStockChange,
   onProductUpdate,
   onProductCreate,
+  isSaving,
   isDarkMode,
   onThemeToggle,
   onBack,
-  storageError,
+  apiError,
+  onReload,
 }) => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
-  const handleCreateProduct = (product: Product) => {
-    onProductCreate(product);
-    setIsCreateModalOpen(false);
+  const handleCreateProduct = async (product: CreateProductInput): Promise<boolean> => {
+    const saved = await onProductCreate(product);
+    if (saved) setIsCreateModalOpen(false);
+    return saved;
   };
 
   return (
@@ -329,9 +352,12 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Atualize a quantidade disponível de cada produto.</p>
       </div>
 
-      {storageError && (
+      {apiError && (
         <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300">
-          {storageError}
+          <span>{apiError}</span>
+          <button type="button" onClick={onReload} className="ml-3 font-semibold underline underline-offset-2">
+            Recarregar dados
+          </button>
         </p>
       )}
 
@@ -343,6 +369,7 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
             categories={categories}
             onStockChange={onStockChange}
             onProductUpdate={onProductUpdate}
+            isSaving={isSaving}
           />
         ))}
         <button
@@ -364,11 +391,13 @@ export const InventoryPage: React.FC<InventoryPageProps> = ({
           categories={categories}
           onClose={() => setIsCreateModalOpen(false)}
           onSave={handleCreateProduct}
+          isSubmitting={isSaving}
         />
       )}
       {isHistoryOpen && (
         <StockHistoryDrawer
           history={stockHistory}
+          sales={sales}
           onClose={() => setIsHistoryOpen(false)}
         />
       )}

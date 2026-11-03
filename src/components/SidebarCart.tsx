@@ -81,7 +81,7 @@ export const SidebarCart: React.FC<SidebarCartProps> = ({
                     {cartItem.product.name}
                   </div>
                   <div className="mt-0.5 font-mono text-[10px] text-slate-400 dark:text-slate-500">
-                    SKU: {cartItem.product.sku ?? 0} · Qtd: {cartItem.quantity}
+                    SKU: {cartItem.product.sku ?? '—'} · Qtd: {cartItem.quantity}
                   </div>
                 </div>
 
